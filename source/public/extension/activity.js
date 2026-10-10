@@ -1,7 +1,8 @@
 // Only opaque context hashes and timestamps are sent. No message text is read.
 let last=0,pending=null,lastPath='';const hashes=new Map();
 async function hash(value){if(!hashes.has(value))hashes.set(value,crypto.subtle.digest('SHA-256',new TextEncoder().encode(value)).then(buffer=>Array.from(new Uint8Array(buffer)).map(x=>x.toString(16).padStart(2,'0')).join('')));return hashes.get(value);}
-async function contextFor(path){const project=path.match(/^\/g\/(g-p-[^/]+)/)?.[1]||'';return {context:await hash(path),projectContext:project?await hash(project):''};}
+function projectKey(path){return path.match(/\/g\/(g-p-[A-Za-z0-9_-]+)/)?.[1]||path.match(/\/project\/([A-Za-z0-9_-]+)/)?.[1]||'';}
+async function contextFor(path){const project=projectKey(path);return {context:await hash(path),projectContext:project?await hash(project):''};}
 async function send(at,path){try{await chrome.runtime.sendMessage({type:'activity',at,...await contextFor(path)});}catch{}}
 function activity(e){
  if(!e.isTrusted||document.visibilityState!=='visible'||!document.hasFocus())return;

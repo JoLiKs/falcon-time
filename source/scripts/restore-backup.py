@@ -10,7 +10,7 @@ if destination.exists():
 data = json.loads(source.read_text())
 if data.get('format') != 'falcon-time-backup' or data.get('version') != 1:
     raise SystemExit('Use the full backup downloaded from the owner cabinet.')
-allowed = {'settings','people','projects','devices','events','corrections','audit','review_events','session_archive'}
+allowed = {'settings','people','projects','devices','events','corrections','audit','review_events','session_archive','absences','period_closes','disputes'}
 if set(data.get('tables', {})) - allowed:
     raise SystemExit('Unexpected table in backup.')
 required = {'settings','people','projects','devices','events','corrections','audit'}

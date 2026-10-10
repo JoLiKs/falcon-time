@@ -208,6 +208,26 @@ test('The exported backup restores through the actual CLI without reviving devic
  }finally{rmSync(dir,{recursive:true,force:true});}
 });
 
+test('Work rules, absences, week lock, disputes and cabinet presence',async()=>{
+ const owner=await setup(),employee=await member(owner);const d=await device(employee);
+ assert.equal((await request('rules',{cookie:employee,body:{idleMinutes:30,countIdle:false,alertHour:11,longMinutes:240}})).status,403);
+ assert.equal((await request('rules',{cookie:owner,body:{idleMinutes:30,countIdle:false,alertHour:11,longMinutes:240}})).status,200);
+ const firstEvent=event(d,1);await send(employee,d,[firstEvent]);now+=20*60000;await send(employee,d,[event(d,2)]);
+ const quiet=(await request('data',{cookie:employee})).data;assert.equal(quiet.sessions.reduce((n,s)=>n+s.end-s.start,0),20*60000);
+ assert.equal((await request('rules',{cookie:owner,body:{idleMinutes:30,countIdle:true,alertHour:11,longMinutes:240}})).status,200);
+ assert.equal((await request('absence',{cookie:employee,body:{day:'2026-09-30',kind:'off',note:'Выходной'}})).status,200);
+ assert.equal((await request('data',{cookie:employee})).data.absences.length,1);
+ assert.equal((await request('period-close',{cookie:employee,body:{action:'submit',date:'2026-09-30'}})).status,200);
+ assert.equal((await request('period-close',{cookie:owner,body:{action:'accept',date:'2026-09-30',personId:'daniil'}})).status,200);
+ const locked=await send(employee,d,[event(d,3)]);assert.equal(locked.data.rejected[0].reason,'Неделя уже подтверждена');
+ now+=40*60000;
+ assert.equal((await request('dispute',{cookie:employee,body:{sessionId:firstEvent.id,reason:'Это не моя смена'}})).status,200);
+ assert.equal((await request('dispute',{cookie:owner,body:{action:'resolve',id:'dispute-'+firstEvent.id,decision:'noted',reason:'Проверено'}})).status,200);
+ assert.equal((await request('presence',{cookie:owner,body:{action:'start',projectId:'homekept'}})).status,200);
+ assert.equal((await request('projects',{cookie:owner,body:{id:'homekept',name:'HomeKept',active:true,budgetMinutes:600}})).status,200);
+ const report=await request('data',{cookie:owner});assert.equal(report.data.projects.find(p=>p.id==='homekept').budget_minutes,600);assert.ok(report.data.rules.countIdle);
+});
+
 test('A failed audit write rolls back a manual time correction',async()=>{
  const owner=await setup();failSql=/INSERT INTO audit/;
  const result=await request('manual',{cookie:owner,body:{personId:'zafar',projectId:'homekept',start:now-7200000,end:now-3600000,reason:'Проверка атомарности'}});

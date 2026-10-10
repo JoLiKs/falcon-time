@@ -1,6 +1,6 @@
 import { env } from '@/lib/runtime';
 import { recentEvents, archivedSessions, archiveState } from './archive';
-import { deriveSessions,type Event,type Session } from './time';
+import { deriveSessions,IDLE,type Event,type Session } from './time';
 export function db(){if(!env.DB)throw new Error('База временно недоступна');return env.DB;}
 export const query=async(sql:string,...args:unknown[])=>((await db().prepare(sql).bind(...args).all()).results||[]) as any[];
 export const first=async(sql:string,...args:unknown[])=>await db().prepare(sql).bind(...args).first() as any;
@@ -13,9 +13,10 @@ export async function initialize(){const now=Date.now();await db().batch([
  db().prepare('INSERT OR IGNORE INTO people (id,name,role,created) VALUES (?,?,?,?)').bind('zafar','Зафар Сафаров','owner',now),db().prepare('INSERT OR IGNORE INTO people (id,name,role,created) VALUES (?,?,?,?)').bind('yura','Юра','admin',now),db().prepare('INSERT OR IGNORE INTO people (id,name,role,created) VALUES (?,?,?,?)').bind('daniil','Даниил','member',now),
  ...[['none','Без проекта'],['falcon-messenger','Falcon Messenger'],['homekept','HomeKept'],['falcon-cockpit','Falcon Cockpit']].map(([id,name])=>db().prepare('INSERT OR IGNORE INTO projects (id,name) VALUES (?,?)').bind(id,name))]);}
 export async function audit(actor:string,action:string,target:string,detail:unknown){await run('INSERT INTO audit (id,actor,action,target,detail,at) VALUES (?,?,?,?,?,?)',crypto.randomUUID(),actor,action,target,JSON.stringify(detail),Date.now());}
+export async function idlePolicy(){const minutes=await first("SELECT value FROM settings WHERE key='idle-minutes'");const counts=await first("SELECT value FROM settings WHERE key='idle-counts'");const value=Number(minutes?.value);return {idle:Number.isInteger(value)&&value>=5&&value<=180?value*60000:IDLE,countIdle:counts?.value!=='0'};}
 export async function allSessions(personIds:string[],now=Date.now()):Promise<Session[]>{
- const result:Session[]=[];
- for(const id of personIds){const snapshot=await archiveState(id);const automatic=[...await archivedSessions(id,snapshot),...deriveSessions(await recentEvents(id,snapshot),now)];const cs=await query('SELECT * FROM corrections WHERE person_id=?',id);result.push(...applyCorrections(automatic,cs));}
+ const policy=await idlePolicy();const result:Session[]=[];
+ for(const id of personIds){const snapshot=await archiveState(id);const automatic=[...await archivedSessions(id,snapshot),...deriveSessions(await recentEvents(id,snapshot),now,policy)];const cs=await query('SELECT * FROM corrections WHERE person_id=?',id);result.push(...applyCorrections(automatic,cs));}
  return result.sort((a,b)=>a.start-b.start);
 }
 // A correction replaces its original interval, not later activity that can merge

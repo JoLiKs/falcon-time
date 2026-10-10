@@ -1,4 +1,4 @@
-import {db,query,first} from './server';
+import {db,query,first,idlePolicy} from './server';
 import {deriveSessions,localDate,localMidnight,type Event,type Session} from './time';
 export async function archiveState(personId:string){const checkpoint=await first('SELECT value FROM settings WHERE key=?','archive:'+personId);return checkpoint?JSON.parse(checkpoint.value):{at:0,paused:false};}
 export async function recentEvents(personId:string,snapshot?:any):Promise<Event[]>{
@@ -11,7 +11,7 @@ export async function archivedSessions(personId:string,snapshot?:any):Promise<Se
 export async function archiveHistory(now=Date.now()){
  const people=await query('SELECT id FROM people');const retentionStart=localMidnight(`${Number(localDate(now).slice(0,4))-1}-01-01`);
  for(const person of people){
-  const events=await recentEvents(person.id);const sessions=deriveSessions(events,now);let cutoff=now-8*86400000;
+  const events=await recentEvents(person.id);const sessions=deriveSessions(events,now,await idlePolicy());let cutoff=now-8*86400000;
   const crossing=sessions.find(s=>s.start<cutoff&&s.end>cutoff);if(crossing)cutoff=crossing.start;
   const previous=await first('SELECT value FROM settings WHERE key=?','archive:'+person.id);if(previous&&JSON.parse(previous.value).at>=cutoff)continue;
   const corrections=await query('SELECT session_id FROM corrections WHERE person_id=?',person.id);const correctionIds=new Set(corrections.map(c=>c.session_id));

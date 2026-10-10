@@ -2,7 +2,7 @@ import {env} from '@/lib/runtime';
 import {db,query,run,hash,token,first} from './server';
 import {archiveHistory} from './archive';
 import {Problem} from './http';
-const tables=['settings','people','projects','devices','corrections','audit','review_events','session_archive'] as const;
+const tables=['settings','people','projects','devices','corrections','audit','review_events','session_archive','absences','period_closes','disputes'] as const;
 async function writeVerified(key:string,body:string){
  if(!env.BUCKET)throw new Error('Хранилище резервных копий не подключено');
  const checksum=await hash(body);await env.BUCKET.put(key,body,{httpMetadata:{contentType:'application/json'},customMetadata:{checksum}});

@@ -1,6 +1,6 @@
 import { getChatGPTUser } from '../../chatgpt-auth';
-import { db,query,first,run,token,codeHash,audit,allSessions,controlState,auditStatement,eventStatement } from '@/lib/server';
-import { clipSessions,periodBounds,localDate } from '@/lib/time';
+import { db,query,first,run,token,codeHash,audit,allSessions,controlState,auditStatement,eventStatement,idlePolicy } from '@/lib/server';
+import { clipSessions,periodBounds,localDate,duration } from '@/lib/time';
 import { ingestEvents } from '@/lib/ingest';
 import { deviceHealth } from '@/lib/tracking';
 import { dailyBackup,createBackup,backupData } from '@/lib/backup';
@@ -34,13 +34,17 @@ async function handle(req:Request){
    auditStatement(me.id,'profile',me.id,{name})
   ]);return json({ok:true});
  }
- if(path==='data'&&method==='GET'){const people=admin?await query('SELECT * FROM people ORDER BY created,id'):[me];const ids=people.map(p=>p.id);const projects=await query('SELECT * FROM projects ORDER BY name');const devices=admin?await query('SELECT * FROM devices ORDER BY created'):await query('SELECT * FROM devices WHERE person_id=? ORDER BY created',me.id);const period=url.searchParams.get('period')||'day';if(!['day','week','month','year'].includes(period))fail('Неверный период');const date=url.searchParams.get('date')||localDate(Date.now());if(!/^\d{4}-\d{2}-\d{2}$/.test(date))fail('Неверная дата');if(Number.isNaN(Date.parse(date+'T12:00:00Z'))||new Date(date+'T12:00:00Z').toISOString().slice(0,10)!==date)fail('Неверная дата');const bounds=periodBounds(period,date);const all=await allSessions(ids);const review=admin?await query("SELECT * FROM review_events WHERE status='pending' ORDER BY created DESC LIMIT 200"):await query("SELECT * FROM review_events WHERE person_id=? AND status='pending' ORDER BY created DESC LIMIT 200",me.id);const tracking=Object.fromEntries(await Promise.all(ids.map(async id=>{const c=await controlState(id);return [id,{paused:!!c&&c.kind!=='resume',at:c?.at}]})));return json({review,tracking,backups:admin?await query('SELECT id,created,checksum,bytes,verified FROM backups ORDER BY created DESC LIMIT 10'):[],backupError:admin?(await first("SELECT value FROM settings WHERE key='backup-error'"))?.value:null,me,people:people.map(safePerson),projects,devices:devices.map(d=>({...d,...deviceHealth(d,Date.now())})),sessions:clipSessions(all,bounds.from,bounds.to).map(({event_ids,...s})=>s),current:all.filter(s=>s.open).map(({event_ids,...s})=>s),bounds,serverTime:Date.now(),audit:admin?await query('SELECT a.*,p.name as actor_name FROM audit a LEFT JOIN people p ON a.actor=p.id ORDER BY at DESC LIMIT 30'):[]});}
+ if(path==='data'&&method==='GET'){const people=admin?await query('SELECT * FROM people ORDER BY created,id'):[me];const ids=people.map(p=>p.id);const projects=await query('SELECT * FROM projects ORDER BY name');const devices=admin?await query('SELECT * FROM devices ORDER BY created'):await query('SELECT * FROM devices WHERE person_id=? ORDER BY created',me.id);const period=url.searchParams.get('period')||'day';if(!['day','week','month','year'].includes(period))fail('Неверный период');const date=url.searchParams.get('date')||localDate(Date.now());if(!/^\d{4}-\d{2}-\d{2}$/.test(date))fail('Неверная дата');if(Number.isNaN(Date.parse(date+'T12:00:00Z'))||new Date(date+'T12:00:00Z').toISOString().slice(0,10)!==date)fail('Неверная дата');const bounds=periodBounds(period,date);const all=await allSessions(ids);const review=admin?await query("SELECT * FROM review_events WHERE status='pending' ORDER BY created DESC LIMIT 200"):await query("SELECT * FROM review_events WHERE person_id=? AND status='pending' ORDER BY created DESC LIMIT 200",me.id);const tracking=Object.fromEntries(await Promise.all(ids.map(async id=>{const c=await controlState(id);return [id,{paused:!!c&&c.kind!=='resume',at:c?.at}]})));const absences=admin?await query('SELECT * FROM absences ORDER BY day DESC LIMIT 400'):await query('SELECT * FROM absences WHERE person_id=? ORDER BY day DESC LIMIT 400',me.id);const closes=admin?await query('SELECT * FROM period_closes ORDER BY updated DESC LIMIT 200'):await query('SELECT * FROM period_closes WHERE person_id=? ORDER BY updated DESC LIMIT 80',me.id);const disputes=admin?await query('SELECT * FROM disputes ORDER BY created DESC LIMIT 100'):await query('SELECT * FROM disputes WHERE person_id=? ORDER BY created DESC LIMIT 50',me.id);const policy=await idlePolicy();const alertHour=Number((await first("SELECT value FROM settings WHERE key='alert-hour'"))?.value);const longMinutes=Number((await first("SELECT value FROM settings WHERE key='long-session-minutes'"))?.value);const rules={idleMinutes:policy.idle/60000,countIdle:policy.countIdle,alertHour:Number.isInteger(alertHour)&&alertHour>=0&&alertHour<=23?alertHour:11,longMinutes:Number.isInteger(longMinutes)&&longMinutes>=60&&longMinutes<=720?longMinutes:240};const today=localDate(Date.now());const todayBounds=periodBounds('day',today);const nyHour=Number(new Intl.DateTimeFormat('en-US',{timeZone:'America/New_York',hour:'2-digit',hourCycle:'h23'}).format(Date.now()));const alerts:any[]=[];for(const person of people){if(!person.active||!person.onboarded)continue;const absent=absences.some((item:any)=>item.person_id===person.id&&item.day===today);const own=all.filter((session:any)=>session.person_id===person.id&&session.end>todayBounds.from&&session.start<todayBounds.to);if(!absent&&nyHour>=rules.alertHour&&duration(own)===0)alerts.push({kind:'empty',personId:person.id,text:person.name+': сегодня ещё нет учтённого времени'});for(const session of own){if(!session.open&&session.end-session.start>rules.longMinutes*60000)alerts.push({kind:'long',personId:person.id,text:person.name+': сессия длиннее '+rules.longMinutes+' мин'});}}return json({review,tracking,absences,closes,disputes,rules,alerts:alerts.slice(0,20),backups:admin?await query('SELECT id,created,checksum,bytes,verified FROM backups ORDER BY created DESC LIMIT 10'):[],backupError:admin?(await first("SELECT value FROM settings WHERE key='backup-error'"))?.value:null,me,people:people.map(safePerson),projects,devices:devices.map(d=>({...d,...deviceHealth(d,Date.now())})),sessions:clipSessions(all,bounds.from,bounds.to).map(({event_ids,...s})=>s),current:all.filter(s=>s.open).map(({event_ids,...s})=>s),bounds,serverTime:Date.now(),audit:admin?await query('SELECT a.*,p.name as actor_name FROM audit a LEFT JOIN people p ON a.actor=p.id ORDER BY at DESC LIMIT 30'):[]});}
  if(path==='projects'&&method==='POST'){
   needAdmin();const name=field(b.name,100),id=b.id?field(b.id,80):crypto.randomUUID();
   if(b.active!==undefined&&typeof b.active!=='boolean')fail('Неверное состояние проекта');
   if(id==='none')fail('Нельзя менять системный проект');
   if(b.id&&!await first('SELECT id FROM projects WHERE id=?',id))fail('Проект не найден',404);
-  await db().batch([b.id?db().prepare('UPDATE projects SET name=?,active=? WHERE id=?').bind(name,b.active===false?0:1,id):db().prepare('INSERT INTO projects (id,name,active) VALUES (?,?,?)').bind(id,name,b.active===false?0:1),auditStatement(me.id,'project',id,{name,active:b.active!==false})]);
+  let budget:number|null|undefined=undefined;
+  if(b.budgetMinutes===null)budget=null;else if(b.budgetMinutes!==undefined){const minutes=Number(b.budgetMinutes);if(!Number.isInteger(minutes)||minutes<30||minutes>100000)fail('Лимит проекта — от 30 минут до 100000');budget=minutes;}
+  const activeFlag=b.active===false?0:1;
+  const projectWrite=b.id?(budget===undefined?db().prepare('UPDATE projects SET name=?,active=? WHERE id=?').bind(name,activeFlag,id):db().prepare('UPDATE projects SET name=?,active=?,budget_minutes=? WHERE id=?').bind(name,activeFlag,budget,id)):db().prepare('INSERT INTO projects (id,name,active,budget_minutes) VALUES (?,?,?,?)').bind(id,name,activeFlag,budget??null);
+  await db().batch([projectWrite,auditStatement(me.id,'project',id,{name,active:b.active!==false,budgetMinutes:budget??null})]);
   return json({ok:true,id});
  }
  if(path==='people'&&method==='POST'){
@@ -115,6 +119,71 @@ async function handle(req:Request){
  db().prepare('INSERT INTO corrections (session_id,person_id,project_id,start,end,original_start,original_end,reason,actor,updated) SELECT ?,?,?,?,?,?,?,?,?,? WHERE NOT EXISTS (SELECT 1 FROM corrections WHERE person_id=? AND session_id<>? AND start<? AND end>?) ON CONFLICT(session_id) DO UPDATE SET start=excluded.start,end=excluded.end,reason=excluded.reason,actor=excluded.actor,updated=excluded.updated').bind(id,s.person_id,original!.project_id,start,end,original!.originalStart||original!.start,original!.originalEnd||original!.end,reason,me.id,changedAt,s.person_id,id,end,start),
  db().prepare('INSERT INTO audit (id,actor,action,target,detail,at) SELECT ?,?,?,?,?,? WHERE changes()>0').bind(changeId,me.id,'correction',id,JSON.stringify({before:original,after:{start,end},reason}),changedAt)
  ]);if(!result[0].meta.changes)fail('Другой администратор изменил пересекающуюся сессию. Обновите журнал.',409);return json({ok:true});}
+ if(path==='rules'&&method==='POST'){
+  needAdmin();const idleMinutes=Number(b.idleMinutes),alert=Number(b.alertHour),longSession=Number(b.longMinutes);
+  if(!Number.isInteger(idleMinutes)||idleMinutes<5||idleMinutes>180)fail('Простой — от 5 до 180 минут');
+  if(typeof b.countIdle!=='boolean')fail('Укажите, входит ли ожидание в итог');
+  if(!Number.isInteger(alert)||alert<0||alert>23)fail('Час сигнала — от 0 до 23');
+  if(!Number.isInteger(longSession)||longSession<60||longSession>720)fail('Длинная сессия — от 60 до 720 минут');
+  await db().batch([
+   db().prepare("INSERT INTO settings (key,value) VALUES ('idle-minutes',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value").bind(String(idleMinutes)),
+   db().prepare("INSERT INTO settings (key,value) VALUES ('idle-counts',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value").bind(b.countIdle?'1':'0'),
+   db().prepare("INSERT INTO settings (key,value) VALUES ('alert-hour',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value").bind(String(alert)),
+   db().prepare("INSERT INTO settings (key,value) VALUES ('long-session-minutes',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value").bind(String(longSession)),
+   auditStatement(me.id,'rules','workspace',{idleMinutes,countIdle:b.countIdle,alertHour:alert,longMinutes:longSession}),
+  ]);return json({ok:true});
+ }
+ if(path==='absence'&&method==='POST'){
+  const personId=admin&&b.personId?field(b.personId,80):me.id;if(personId!==me.id&&!admin)fail('Нет доступа',403);
+  if(!await first('SELECT id FROM people WHERE id=?',personId))fail('Сотрудник не найден',404);
+  const day=field(b.day,10);if(!/^\d{4}-\d{2}-\d{2}$/.test(day))fail('Неверная дата');
+  if(!['vacation','sick','off'].includes(b.kind))fail('Неверный вид отсутствия');
+  if(b.remove===true){await db().batch([db().prepare('DELETE FROM absences WHERE person_id=? AND day=?').bind(personId,day),auditStatement(me.id,'absence-remove',personId,{day})]);return json({ok:true});}
+  const note=typeof b.note==='string'?b.note.trim().slice(0,300):'';
+  const id='absence-'+personId+'-'+day;
+  await db().batch([db().prepare('INSERT INTO absences (id,person_id,day,kind,note,actor,created) VALUES (?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET kind=excluded.kind,note=excluded.note,actor=excluded.actor').bind(id,personId,day,b.kind,note,me.id,Date.now()),auditStatement(me.id,'absence',personId,{day,kind:b.kind})]);
+  return json({ok:true,id});
+ }
+ if(path==='period-close'&&method==='POST'){
+  const date=field(b.date,10);if(!/^\d{4}-\d{2}-\d{2}$/.test(date))fail('Неверная дата');
+  const start=periodBounds('week',date).label;const personId=admin&&b.personId?field(b.personId,80):me.id;
+  if(personId!==me.id&&!admin)fail('Нет доступа',403);
+  if(!await first('SELECT id FROM people WHERE id=?',personId))fail('Сотрудник не найден',404);
+  const id='week-'+personId+'-'+start;const reason=typeof b.reason==='string'?b.reason.trim().slice(0,300):'';
+  if(b.action==='reopen'){needAdmin();await db().batch([db().prepare('DELETE FROM period_closes WHERE id=?').bind(id),auditStatement(me.id,'week-reopen',personId,{start})]);return json({ok:true});}
+  if(!['submit','accept'].includes(b.action))fail('Неверное действие');
+  if(b.action==='accept')needAdmin();
+  if(b.action==='submit'&&personId!==me.id)fail('Сотрудник подтверждает только свою неделю',403);
+  const status=b.action==='accept'?'accepted':'submitted';
+  await db().batch([db().prepare('INSERT INTO period_closes (id,person_id,period_start,period,status,reason,actor,updated) VALUES (?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET status=excluded.status,reason=excluded.reason,actor=excluded.actor,updated=excluded.updated').bind(id,personId,start,'week',status,reason,me.id,Date.now()),auditStatement(me.id,'week-'+status,personId,{start})]);
+  return json({ok:true,id,status});
+ }
+ if(path==='dispute'&&method==='POST'){
+  if(b.action==='resolve'){
+   needAdmin();const id=field(b.id,80),resolution=field(b.reason,500);
+   if(!['dismiss','noted'].includes(b.decision))fail('Неверное решение');
+   const result=await db().batch([db().prepare("UPDATE disputes SET status=?,resolution=?,actor=?,resolved=? WHERE id=? AND status='pending'").bind(b.decision==='dismiss'?'dismissed':'noted',resolution,me.id,Date.now(),id),auditStatement(me.id,'dispute-'+b.decision,id,{resolution},true)]);
+   if(!result[0].meta.changes)fail('Спор уже рассмотрен',409);return json({ok:true});
+  }
+  const sessionId=field(b.sessionId,80),reason=field(b.reason,500);
+  const sessions=await allSessions([me.id]);const session=sessions.find(item=>item.id===sessionId);
+  if(!session||session.person_id!==me.id)fail('Можно оспорить только свою завершённую сессию',404);
+  if(!session||session.open)fail('Сначала дождитесь закрытия сессии');
+  const id='dispute-'+sessionId;
+  const saved=await db().batch([db().prepare("INSERT INTO disputes (id,session_id,person_id,reason,created) VALUES (?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET reason=excluded.reason,status='pending',resolution='',actor=NULL,resolved=NULL,created=excluded.created WHERE disputes.status<>'pending'").bind(id,sessionId,me.id,reason,Date.now()),auditStatement(me.id,'dispute',sessionId,{reason},true)]);
+  if(!saved[0].meta.changes)fail('Спор по этой сессии уже открыт',409);
+  return json({ok:true,id});
+ }
+ if(path==='presence'&&method==='POST'){
+  if(!me.onboarded)fail('Сначала заполните анкету');
+  if(!['start','ping','stop'].includes(b.action))fail('Неверное действие');
+  const projectId=b.projectId?field(b.projectId,80):'none';
+  if(!await first('SELECT id FROM projects WHERE id=? AND active=1',projectId))fail('Проект не найден');
+  const control=await controlState(me.id);if(control&&control.kind!=='resume')fail('Учёт остановлен. Сначала нажмите «Возобновить».');
+  const kind=b.action==='stop'?'device-stop':'activity';
+  await db().batch([eventStatement(me.id,'cabinet',projectId,kind,Date.now()),auditStatement(me.id,'presence-'+b.action,me.id,{projectId})]);
+  return json({ok:true});
+ }
  return json({error:'Не найдено'},404);
 }
 export const GET=apiBoundary(handle);export const POST=GET;export const PUT=GET;export const PATCH=GET;export const DELETE=GET;

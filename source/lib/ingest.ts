@@ -1,5 +1,6 @@
 import {db,query,first,run,controlState} from './server';
 import {eventIssue,type IncomingEvent} from './tracking';
+import {localDate,periodBounds} from './time';
 const validId=(v:unknown):v is string=>typeof v==='string'&&v.length>0&&v.length<=80;
 export async function ingestEvents(personId:string,device:any,input:any[],now=Date.now()){
  const accepted:string[]=[],rejected:{id:string;reason:string}[]=[],ignored:string[]=[];
@@ -16,6 +17,10 @@ export async function ingestEvents(personId:string,device:any,input:any[],now=Da
   if(pending){rejected.push({id:e.id,reason:pending.reason});continue;}
   let reason=eventIssue(e,now,device.created);
   if(e.kind!=='activity'||!projects.has(e.projectId))reason='Неизвестный проект или тип события';
+  if(!reason){
+   const day=localDate(Number.isSafeInteger(e.at)?e.at:now);const week=periodBounds('week',day).label;
+   if(await first("SELECT id FROM period_closes WHERE person_id=? AND period='week' AND period_start=? AND status='accepted'",personId,week))reason='Неделя уже подтверждена';
+  }
   if(!reason){
    const prev=await first('SELECT seq,at FROM events WHERE device_id=? AND seq<? ORDER BY seq DESC LIMIT 1',device.id,e.seq);
    const next=await first('SELECT seq,at FROM events WHERE device_id=? AND seq>? ORDER BY seq LIMIT 1',device.id,e.seq);

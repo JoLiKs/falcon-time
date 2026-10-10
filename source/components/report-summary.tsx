@@ -2,7 +2,7 @@
 
 import { Clock3, FolderKanban, ListChecks, Users } from 'lucide-react';
 import { Button } from '@/components/ui/button';
-import { duration, formatDuration, type Session } from '@/lib/time';
+import { duration, formatDuration, sessionParts, type Session } from '@/lib/time';
 
 export function ReportSummary({ sessions, projects, period, onConnect }: {
   sessions: Session[];
@@ -11,6 +11,7 @@ export function ReportSummary({ sessions, projects, period, onConnect }: {
   onConnect: () => void;
 }) {
   const total = duration(sessions);
+  const parts = sessions.reduce((sum, session) => {const part = sessionParts(session); sum.confirmed += part.confirmed; sum.tail += part.tail; return sum;}, {confirmed:0, tail:0});
   const activePeople = new Set(sessions.map(s => s.person_id)).size;
   const allocation = projects.map(project => ({
     ...project,
@@ -22,7 +23,7 @@ export function ReportSummary({ sessions, projects, period, onConnect }: {
     <section className="total-panel" aria-label="Итог времени">
       <div className="total-panel-top"><span className="eyebrow">УЧТЁННОЕ ВРЕМЯ</span><span className="period-label"><span className="subtle-dot" aria-hidden="true"/>{periodName}</span></div>
       <div className="total-number">{formatDuration(total)}</div>
-      <p className="total-description">{sessions.length ? 'Время команды за выбранный период' : 'Сессии появятся после подключения устройства'}</p>
+      <p className="total-description">{sessions.length ? `Подтверждено действиями ${formatDuration(parts.confirmed)} · ожидание ${formatDuration(parts.tail)}` : 'Сессии появятся после подключения устройства'}</p>
       <div className="total-details">
         <div><ListChecks size={17}/><span><strong>{sessions.length}</strong><small>Сессий</small></span></div>
         <div><Users size={17}/><span><strong>{activePeople}</strong><small>Сотрудников с активностью</small></span></div>

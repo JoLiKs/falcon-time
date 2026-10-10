@@ -12,7 +12,7 @@ test('VPS: real SQLite batch rolls back all writes and survives reopen with migr
  assert.equal(await db.prepare("SELECT * FROM projects WHERE id='test'").first(),null);
  await db.prepare("INSERT INTO projects(id,name) VALUES ('kept','Kept')").run();db.close();db=openDatabase(filename);
  assert.equal((await db.prepare("SELECT * FROM projects WHERE id='kept'").first()).name,'Kept');
- assert.equal((await db.prepare('SELECT COUNT(*) AS n FROM falcon_migrations').first()).n,5);
+ assert.equal((await db.prepare('SELECT COUNT(*) AS n FROM falcon_migrations').first()).n,6);
  }finally{db?.close();fs.rmSync(dir,{recursive:true,force:true});}
 });
 test('VPS: object store persists backup bytes, handles missing files and rejects traversal',async()=>{

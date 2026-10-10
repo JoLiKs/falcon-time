@@ -24,6 +24,7 @@ const methods: Record<string,string> = {
   logout:'POST', profile:'POST', projects:'POST', people:'POST', 'access-code':'POST',
   devices:'POST', 'device/revoke':'POST', tracking:'POST', heartbeat:'POST',
   events:'POST', review:'POST', backup:'POST', manual:'POST', correction:'POST',
+  rules:'POST', absence:'POST', 'period-close':'POST', dispute:'POST', presence:'POST',
 };
 export function checkMethod(path: string, method: string) {
   const allowed = methods[path];
