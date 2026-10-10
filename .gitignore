@@ -1,0 +1,12 @@
+node_modules/
+# Previous standalone build. Rebuild before Docker deploy.
+runtime/
+**/.next/
+**/.vinext/
+**/.wrangler/
+*.sqlite*
+secrets/
+data/
+backups/
+.env*
+*.log
